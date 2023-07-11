@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "*.cjson": "jsonc",
+        "*.wxss": "css",
+        "*.wxs": "javascript",
+        "user.h": "c",
+        "proc.h": "c",
+        "sysinfo.h": "c",
+        "memlayout.h": "c",
+        "spinlock.h": "c",
+        "defs.h": "c",
+        "riscv.h": "c"
+    }
+}
