@@ -164,6 +164,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  //重置traceMask
+  p->traceMask = 0;
 }
 
 // Create a user page table for a given process,
@@ -304,6 +306,8 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
+  //复制追踪信息
+  np->traceMask = p->traceMask;
 
   release(&np->lock);
 
@@ -653,4 +657,12 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+int getRunningProcCount(){
+  int procCount = 0;
+  for(int i=0;i<NPROC;i++)
+    if(proc[i].state!=UNUSED) procCount++;
+  return procCount;
 }
