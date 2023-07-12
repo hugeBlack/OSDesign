@@ -432,3 +432,42 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+
+void vmprint(pagetable_t pgtbl){
+  //xv6使用三级页表来管理,9,9,9,12
+  printf("page table %p\n",pgtbl);
+  for (int i = 0; i <= PXMASK; ++i) {
+    //通过页表指针找到L2页表项
+      pte_t pteL2 = pgtbl[i];
+      //检查页表是否被使用
+      if(!(pteL2 & PTE_V)) continue;
+      //获取物理地址
+      pagetable_t paL2= (pagetable_t) PTE2PA(pteL2);
+
+      printf(" ..%d: ", i);
+      printf("pte %p pa %p\n", pteL2, paL2);
+
+      //一样的方法处理L1
+      for (int j = 0; j <= PXMASK; ++j) {
+        pte_t pteL1 = paL2[j];
+        if (!(pteL1 & PTE_V)) continue;
+        pagetable_t paL1= (pagetable_t) PTE2PA(pteL1);
+
+        printf(" .. ..%d: ", j);
+        printf("pte %p pa %p\n", pteL1, paL1);
+
+        //一样的方法处理L0
+        for (int k = 0; k <= PXMASK; ++k) {
+          pte_t pteL0 = paL1[k];
+          if (!(pteL0 & PTE_V)) continue;
+          
+          printf(" .. .. ..%d: ", k);
+          printf("pte %p pa %p\n", pteL0, PTE2PA(pteL0));
+          
+        }
+        
+      }
+      
+    }
+}
