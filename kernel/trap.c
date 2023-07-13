@@ -77,8 +77,29 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    //处理计时器与调用handler
+    if(p->alarmInterval>0){
+      //当alarm存在
+      if(p->ticksSinceLastAlarm>=p->alarmInterval && !p->handlerRunning){
+        //且中断时alarm并不在执行时才处理
+        p->ticksSinceLastAlarm = 0;
+        p->handlerRunning = 1;
+        //保存执行前的trapframe
+        memmove(&(p->trapframeStored), p->trapframe, sizeof(struct trapframe));
+        //存完再修改PC
+        p->trapframe->epc = p->alarmHandler;
+      }else{
+        //alarm还在运行时只++不检测是否需要运行alarm
+        p->ticksSinceLastAlarm ++;
+      }
+    }
+      
+
+
     yield();
+  }
+
 
   usertrapret();
 }
@@ -218,3 +239,17 @@ devintr()
   }
 }
 
+
+void
+backtrace(void)
+{
+  //当前栈的指针
+  uint64 fpNow = r_fp();
+  printf("backtrace:\n");
+  uint64 stackBottomAddr = PGROUNDUP(fpNow);
+  //下一个fp的地址在当前fp-16的地方
+  for (uint64 fp = fpNow; fp < stackBottomAddr; fp = *((uint64*)(fp-16)) ) {
+    //打印返回地址，返回地址的地址在fp-8
+    printf("%p\n", *((uint64*)(fp-8)));
+  }
+}
