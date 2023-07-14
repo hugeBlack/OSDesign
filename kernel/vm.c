@@ -303,20 +303,31 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
+    //拿到pte
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
+    // 通过pte获取pa
     pa = PTE2PA(*pte);
+    
+    // 把pte改为只读、cow
+    *pte |= PTE_COW;
+    *pte &= ~PTE_W;
+
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // 共享记数+1
+    uint64 pageIndex = getPageIndex(pa);
+    pageShareCount[pageIndex]++;
+    // 这里直接把原来的pa映射到新页表
+
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      //出现映射错误，此时应该取消共享记数，而不是释放内存
+      pageShareCount[pageIndex]--;
       goto err;
     }
   }
@@ -353,6 +364,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    
+    // 检查pagefault，有的话就复制
+    cow(pagetable,va0);
+    pa0 = walkaddr(pagetable, va0);
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -431,4 +447,41 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+
+
+
+//尝试进行cow，失败（没有空闲页）返回-1
+//步骤：找到导致fault的pte，检查是不是cow， 
+int cow(pagetable_t pgtbl, uint64 faultVa){
+  //用walk找到pte
+  pte_t *pte = walk(pgtbl, faultVa, 0);
+  //过滤掉不是cow导致的page fault
+  if(!(*pte & PTE_COW))
+    return -1;
+  uint64 pa = PTE2PA(*pte);
+  uint64 pageIndex = getPageIndex(pa);
+  if(pageShareCount[pageIndex]==1){
+    //如果此时只有一个共享记数就清除COW，恢复可写状态
+    *pte &= ~PTE_COW;
+    *pte |= PTE_W;
+  }else{
+    //否则复制，然后原来的共享记数-1
+    char *paNew;
+    // 先尝试分配页面，分配失败的话直接kill掉进程
+    if((paNew = kalloc()) == 0){
+      return -1;
+    }
+    
+    //把新的页面换到pte里面
+    *pte &= 0x3ff;
+    *pte |= PA2PTE(paNew);
+    //复制原来的页面
+    memmove(paNew, (char*)pa, PGSIZE);
+
+    //原来的共享记数+1
+    pageShareCount[pageIndex]--;
+  }
+  return 0;
 }

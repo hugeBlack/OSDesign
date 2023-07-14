@@ -67,6 +67,15 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+
+  }else if(r_scause()==15){
+    //发生缺页，尝试进行cow
+
+    //stval里保存了导致page fault的va
+    if (cow(p->pagetable,r_stval())) {
+      //cow不成功就直接kill
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

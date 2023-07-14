@@ -11,6 +11,13 @@
 
 void freerange(void *pa_start, void *pa_end);
 
+//物理页的共享记数和锁
+char pageShareCount[(PHYSTOP - KERNBASE) >> 12];
+
+uint64 getPageIndex(uint64 pa){
+  return (pa- KERNBASE) >> 12;
+}
+
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
@@ -51,6 +58,16 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  uint64 pageIndex = getPageIndex((uint64)pa);
+  char shareCount = pageShareCount[pageIndex];
+  //如果页面共享记数>1就只减少记数不free
+  if (shareCount > 1) {
+    
+    pageShareCount[pageIndex]--;
+    return;
+  }
+
+
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -76,7 +93,11 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    //分配页面时设置共享记数为1
+    uint64 pageIndex = getPageIndex((uint64)r);
+    pageShareCount[pageIndex] = 1;
+  }
   return (void*)r;
 }
