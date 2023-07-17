@@ -14,6 +14,7 @@
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  uint64 registers[14]; //ra返回地址,sp栈指针,r0~r11
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -62,6 +63,7 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)t->registers,(uint64)current_thread->registers);
   } else
     next_thread = 0;
 }
@@ -76,6 +78,11 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  // 设置新线程的ra和sp
+  // 用户态调用后不应该返回，而应该直接调用要运行的函数，所以把返回地址ra设为函数的地址，使得返回时直接调用函数
+  t->registers[0] = (uint64)func;
+  t->registers[1] = (uint64)t->stack + STACK_SIZE;
+
 }
 
 void 

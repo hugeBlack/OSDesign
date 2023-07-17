@@ -17,6 +17,7 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_mutex_t lock;            // declare a lock
 
 double
 now()
@@ -52,7 +53,11 @@ void put(int key, int value)
     e->value = value;
   } else {
     // the new is new.
+    // 把新的key作为表头插入到bucket中，两个线程竞争修改表头会导致前一个进程的修改被覆盖，得加锁
+    // 要保证table[i]获取的是最新的bucket头，所以锁得加在这里
+    pthread_mutex_lock(&lock);       // acquire lock
     insert(key, value, &table[i], table[i]);
+    pthread_mutex_unlock(&lock);     // release lock
   }
 
 }
@@ -104,7 +109,7 @@ main(int argc, char *argv[])
   pthread_t *tha;
   void *value;
   double t1, t0;
-
+  pthread_mutex_init(&lock, NULL); // initialize the lock
 
   if (argc < 2) {
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);
