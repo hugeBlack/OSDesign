@@ -99,12 +99,12 @@
 // [E1000 3.3.3]
 struct tx_desc
 {
-  uint64 addr;
-  uint16 length;
-  uint8 cso;
-  uint8 cmd;
-  uint8 status;
-  uint8 css;
+  uint64 addr; // 传送描述符在ram的地址
+  uint16 length; // 包的长度
+  uint8 cso; // 校验码偏移量，设为0b
+  uint8 cmd; //指令
+  uint8 status; //状态
+  uint8 css; 
   uint16 special;
 };
 

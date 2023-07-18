@@ -20,6 +20,7 @@ static struct mbuf *rx_mbufs[RX_RING_SIZE];
 static volatile uint32 *regs;
 
 struct spinlock e1000_lock;
+struct spinlock e1000_lock2;
 
 // called by pci_init().
 // xregs is the memory address at which the
@@ -30,6 +31,7 @@ e1000_init(uint32 *xregs)
   int i;
 
   initlock(&e1000_lock, "e1000");
+  initlock(&e1000_lock2, "e1000_2");
 
   regs = xregs;
 
@@ -102,7 +104,30 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+  // 发送mbuf的步骤：
+  // 1. 根据E1000_TDT寄存器可以获取下一个可以放置mbuf的位置，检测器rt_desc中E1000_TXD_STAT_DD的寄存器，为1说明已经发送了mbuf，可以释放内存，为0说明还没有发送且环满了，应报错
+  // 2. 创建tx_desc,设置指令为EOP（最后一个descriptor），RS（回报传输状态，这样才能读到E1000_TXD_STAT_DD）
+  // 3. 把帧的地址放在tx环中，放置完后E1000_TDT前进一格
+  acquire(&e1000_lock);
+  uint32 nextDescIndex = regs[E1000_TDT];
+  //检查是否已经传输完毕
+  if(!(tx_ring[nextDescIndex].status & E1000_TXD_STAT_DD)){
+    release(&e1000_lock);
+    return -1;
+  }
+  //释放内存
+  if(tx_mbufs[nextDescIndex]) mbuffree(tx_mbufs[nextDescIndex]);
+  //清空desc
+  memset(tx_ring+nextDescIndex,0,sizeof(struct tx_desc));
+  //设置desc的属性
+  tx_ring[nextDescIndex].addr = (uint64)m->head;
+  tx_ring[nextDescIndex].length = (uint16)m->len;
+  tx_ring[nextDescIndex].cmd = (E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS);
+
+  tx_mbufs[nextDescIndex] = m;
+  //TDT指向下一个空位
+  regs[E1000_TDT] = (nextDescIndex + 1) % TX_RING_SIZE;
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +140,32 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  // 可能会有很多数据包，要用while死循环读取
+  // E1000_RDT的下一个rx_desc即为要接收的数据包
+  // E1000_RXD_STAT_DD标志了这个数据包是否是新收到的
+  // 不是就说明没有新的数据包，直接返回，否则修改mbuf的长度、指针等属性，用net_rx()返回
+  // 然后分配一个新的mbuf
+  // 最后更新E1000_RDT
+  acquire(&e1000_lock2);
+
+  uint32 nextDescIndex;
+  while(1){
+    // 获取下一个数据包的索引
+    nextDescIndex = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    // 数据包已经被读取了就break
+    if(!(rx_ring[nextDescIndex].status & E1000_RXD_STAT_DD)) break;
+    // 设置一下mbuf的长度，并调用net_rx读取mbuf
+    rx_mbufs[nextDescIndex]->len = rx_ring[nextDescIndex].length;
+    net_rx(rx_mbufs[nextDescIndex]);
+    // 分配一个新的mbuf
+    rx_mbufs[nextDescIndex] = mbufalloc(0);
+    rx_ring[nextDescIndex].addr = (uint64)rx_mbufs[nextDescIndex]->head;
+    rx_ring[nextDescIndex].status = 0;
+    //RDT指向下一个空位
+    regs[E1000_RDT] = nextDescIndex;
+  }
+
+  release(&e1000_lock2);
 }
 
 void
