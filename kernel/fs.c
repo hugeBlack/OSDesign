@@ -400,6 +400,36 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+  //L2->L1->L0
+  // 二级块表
+  if(bn < NDINDIRECT){
+    // 先检测二级块表是否存在，不存在就分配
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    // addr此时是二级块表的指针，用bread读取二级快表中的内容
+    struct buf *bL2Ptr = bread(ip->dev, addr);
+    uint* l1Addrs = (uint*)bL2Ptr->data;
+    
+    // 通过9~16位找到一级快表的地址，不存在就分配
+    if((addr = l1Addrs[bn>>8]) == 0){
+      l1Addrs[bn>>8] = addr = balloc(ip->dev);
+      log_write(bL2Ptr);
+    }
+    // addr此时是一级快表的指针，用bread读取一级快表中的内容，一级块表储存的是0级块表的指针
+    struct buf *bL1Ptr = bread(ip->dev, addr);
+    uint* l0Addrs = (uint*)bL1Ptr->data;
+
+    // 通过1~8位找到0级块表的地址，没有就分配，然后返回
+    if((addr = l0Addrs[bn & 0xff]) == 0){
+      l0Addrs[bn & 0xff] = addr = balloc(ip->dev);
+      log_write(bL1Ptr);
+    }
+    // 扫尾，释放中间块
+    brelse(bL2Ptr);
+    brelse(bL1Ptr);
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -432,6 +462,30 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
+  // 清理二级块表
+  if(ip->addrs[NDIRECT + 1]){
+    // addr此时是二级块表的指针，用bread读取二级快表中的内容
+    struct buf *bL2Ptr = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    uint* l1Addrs = (uint*)bL2Ptr->data;
+    for(int i = 0; i < 256; i++){
+      // 读取一级块的地址，有就清除
+      if(!l1Addrs[i]) continue;
+      struct buf *bL1Ptr = bread(ip->dev, l1Addrs[i]);
+      uint* l0Addrs = (uint*)bL1Ptr->data;
+      // 释放0级块
+      for(int j = 0; j<256;j++){
+        if(!l0Addrs[j]) continue;
+        bfree(ip->dev, l0Addrs[j]);
+        l0Addrs[j] = 0;
+      }
+      brelse(bL1Ptr);
+      bfree(ip->dev, l1Addrs[i]);
+      l1Addrs[i] = 0;
+    }
+    brelse(bL2Ptr);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }

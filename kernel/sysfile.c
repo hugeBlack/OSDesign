@@ -316,6 +316,31 @@ sys_open(void)
     }
   }
 
+  //开了nofollow就和正常文件一样处理
+  if(!(omode & O_NOFOLLOW)){
+    // 递归地找到目标文件，最多递归10次
+    char found = 0;
+    for(int i=0;i<10;i++){
+      // 如果当前文件不是符号链接就直接退出
+      if(ip->type != T_SYMLINK){
+        found = 1;
+        break;
+      }
+      // 是符号链接就读取目标内容，如果读不出来也直接退出
+      if(readi(ip, 0, (uint64)path, 0, ip->size) == 0) break;
+      iunlockput(ip);
+      ip = namei(path);
+      if(ip == 0) break;
+      ilock(ip);
+    }
+    if(!found){
+      if(ip) iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    // 出了循环后检查有没有找到，找到了就继续，没找到就直接返回
+  }
+
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
@@ -482,5 +507,40 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void){
+  char target[MAXPATH], path[MAXPATH];
+
+  if(argstr(0, target, MAXPATH) < 0)
+    return -1;
+  if(argstr(1, path, MAXPATH) < 0)
+    return -1;
+  
+  begin_op();
+  // 文件已经存在直接返回-1
+  if(namei(path)){
+    end_op();
+    return -1;
+  }
+
+  // 新建一个link，并获取inode
+  struct inode* newInode = create(path, T_SYMLINK, 0, 0);
+  if(!newInode){
+    end_op();
+    return -1;
+  }
+  // 锁定i并写入目标路径，writei会自动lock
+  int writeSize = strlen(target) + 1;
+  if(writei(newInode,0,(uint64)target,0,writeSize)!=writeSize){
+    iunlockput(newInode);
+    end_op();
+    return -1;
+  }
+  iupdate(newInode);
+  iunlockput(newInode);
+  end_op();
   return 0;
 }
