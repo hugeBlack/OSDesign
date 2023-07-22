@@ -141,6 +141,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 初始化vma和下一个vma地址
+  memset(&p->vmas, 0, sizeof(p->vmas));
+  p->nextVmaAddr = MMAP_START;
   return p;
 }
 
@@ -313,6 +316,16 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+
+  // 复制一份vmas，并使得文件的共享记数+1
+  //memmove(void *dst, const void *src, uint n)
+  memmove(np->vmas,p->vmas,sizeof(p->vmas));
+  for(int i = 0; i < 16; i++){
+    if(np->vmas[i].isUsed){
+      filedup(np->vmas[i].f);
+    }
+  }
+
   release(&np->lock);
 
   return pid;
@@ -351,6 +364,12 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+
+  // 完全unmap
+  for(int i = 0; i < 16; i++){
+    if(p->vmas[i].isUsed)
+      munmapKernel(p->vmas[i].addr, p->vmas[i].length);
   }
 
   begin_op();

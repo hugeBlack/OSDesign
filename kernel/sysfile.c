@@ -484,3 +484,148 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void){
+  // 只是记录mmap信息，具体然后返回mmap应该从哪里开始，访问等操作通过缺页中断处理
+  // 把vma表放在进程的pcb中，有16个
+  uint64 addr;
+  int length, prot, flags, offset;
+  struct file *f;
+  if(argaddr(0, &addr) || argint(1, &length) || argint(2, &prot) || argint(3, &flags) || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0 )
+    return -1;
+
+  // 判断一下map是否合法，当文件不能写时，不允许写的share模式
+  if(!f->writable && (flags & MAP_SHARED) && (prot & PROT_WRITE)){
+    return -1;
+  }
+    
+
+  // 先找到一个空闲的vma
+  struct proc* p = myproc();
+  struct vma* newVmaPtr = 0;
+  for(int i = 0;i < 16;i++){
+    if(!p->vmas[i].isUsed){
+      newVmaPtr = p->vmas + i;
+      break;
+    }
+  }
+  if(!newVmaPtr){
+    return -1;
+  }
+  
+  if(addr==0){
+    // 开始地址要与页面对齐
+    if(p->nextVmaAddr & 0xfff) p->nextVmaAddr=PGROUNDUP(p->nextVmaAddr);
+    addr = p->nextVmaAddr;
+    p->nextVmaAddr +=length;
+  }
+
+  newVmaPtr->addr = addr;
+  newVmaPtr->f = f;
+  newVmaPtr->flags = flags;
+  newVmaPtr->isUsed = 1;
+  newVmaPtr->length = length;
+  newVmaPtr->offset = offset;
+  newVmaPtr->prot = prot;
+  // 增加一下这个文件的引用记数
+  filedup(f);
+
+  return addr;
+};
+
+uint64
+sys_munmap(void){
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) || argint(1, &length))
+    return -1;
+  return munmapKernel(addr, length);
+}
+
+// 单独拆个函数方便调用
+uint64 munmapKernel(uint64 addr, int length){
+  struct proc* p = myproc();
+  // 先找到要用的vma
+  struct vma* v = 0;
+  for(int i=0;i<16;i++){
+    struct vma* vnow = p->vmas + i;
+    if(vnow->isUsed && vnow->addr <= addr && vnow->addr + vnow->length > addr){
+      v = vnow;
+      break;
+    }
+  }
+  if(!v) return -1;
+  if(length > v->length) return -1;
+
+  // 有share标志需要保存内容
+  if(v->flags == MAP_SHARED){
+    begin_op();
+    ilock(v->f->ip);
+    writei(v->f->ip, 1, v->addr, v->offset, length);
+    iunlock(v->f->ip);
+    end_op();
+  }
+
+  // 保存完后释放内存
+  for(uint64 nowVa = addr; nowVa < addr + length; nowVa += PGSIZE){
+    if(addr + length >= PGROUNDUP(nowVa) && walkaddr(p->pagetable,nowVa)){
+      uvmunmap(p->pagetable,PGROUNDDOWN(nowVa),1,1);
+    }
+  }
+
+  // 修改下vma的内容
+  if(addr==v->addr && length == v->length){
+    // 全unmap了，释放vma与文件
+    v->isUsed = 0;
+    fileclose(v->f);
+  }else if(addr==v->addr){
+    // 从头，留后面
+    v->addr += length;
+    v->offset += length;
+    v->length -= length;
+  }else if(addr+length == v->addr + v->length){
+    // 从尾部，留前面
+    v->length -= length;
+  }else{
+    panic("unmap: not supported");
+  }
+  return 0;
+}
+
+int pageFaultHandler(uint64 addr, struct proc* p){
+  if(addr<MMAP_START) return -1;
+  // 先找到要用的vma
+  struct vma* v = 0;
+  for(int i=0;i<16;i++){
+    struct vma* vnow = p->vmas + i;
+    if(vnow->isUsed && vnow->addr <= addr && vnow->addr + vnow->length > addr){
+      v = vnow;
+      break;
+    }
+  }
+  if(!v) return -1;
+
+  uint64 a;
+  if((a= walkaddr(p->pagetable,addr))){
+    return 0;
+  }
+
+  // 映射地址：先分配物理页面，然后map，然后填上内容
+  char *pa = kalloc();
+  if(pa == 0) return -1;
+  memset(pa, 0, PGSIZE);
+
+  addr&= ~0xfff;
+  // prot和pte的定义正好差一位，属实逆天
+  if (mappages(p->pagetable, addr, PGSIZE, (uint64)pa, (v->prot << 1) | PTE_U)) {
+    kfree(pa);
+    return -1;
+  }
+  ilock(v->f->ip);
+  readi(v->f->ip,0,(uint64)pa,v->offset + addr - v->addr,PGSIZE);
+  
+  iunlock(v->f->ip);
+
+  return 0;
+}
