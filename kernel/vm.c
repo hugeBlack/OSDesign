@@ -321,13 +321,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
     flags = PTE_FLAGS(*pte);
     // 共享记数+1
+    acquire(&cowLock);
     uint64 pageIndex = getPageIndex(pa);
     pageShareCount[pageIndex]++;
     // 这里直接把原来的pa映射到新页表
-
+    release(&cowLock);
     if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
       //出现映射错误，此时应该取消共享记数，而不是释放内存
+      acquire(&cowLock);
       pageShareCount[pageIndex]--;
+      release(&cowLock);
       goto err;
     }
   }
@@ -455,6 +458,8 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 //尝试进行cow，失败（没有空闲页）返回-1
 //步骤：找到导致fault的pte，检查是不是cow， 
 int cow(pagetable_t pgtbl, uint64 faultVa){
+  // 解决maxva的问题
+  if(faultVa >= MAXVA) return -1;
   //用walk找到pte
   pte_t *pte = walk(pgtbl, faultVa, 0);
   //过滤掉不是cow导致的page fault
@@ -479,9 +484,10 @@ int cow(pagetable_t pgtbl, uint64 faultVa){
     *pte |= PA2PTE(paNew);
     //复制原来的页面
     memmove(paNew, (char*)pa, PGSIZE);
-
+    acquire(&cowLock);
     //原来的共享记数+1
     pageShareCount[pageIndex]--;
+    release(&cowLock);
   }
   return 0;
 }

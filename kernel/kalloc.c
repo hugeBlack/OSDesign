@@ -12,8 +12,9 @@
 void freerange(void *pa_start, void *pa_end);
 
 //物理页的共享记数和锁
-char pageShareCount[(PHYSTOP - KERNBASE) >> 12];
-
+uint8 pageShareCount[32768];
+struct spinlock cowLock;
+char initCompleted = 0;
 uint64 getPageIndex(uint64 pa){
   return (pa- KERNBASE) >> 12;
 }
@@ -35,6 +36,8 @@ kinit()
 {
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
+  initCompleted = 1;
+  initlock(&cowLock, "cowlock");
 }
 
 void
@@ -58,15 +61,18 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  uint64 pageIndex = getPageIndex((uint64)pa);
-  char shareCount = pageShareCount[pageIndex];
-  //如果页面共享记数>1就只减少记数不free
-  if (shareCount > 1) {
-    
+  if(initCompleted){
+    acquire(&cowLock);
+    uint64 pageIndex = getPageIndex((uint64)pa);
     pageShareCount[pageIndex]--;
-    return;
+    //如果页面共享记数>1就只减少记数不free
+    if (pageShareCount[pageIndex] > 0) {
+      release(&cowLock);
+      return;
+    }
+    release(&cowLock);
   }
-
+  
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);

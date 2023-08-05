@@ -66,7 +66,8 @@ void            kinit(void);
 
 #include "memlayout.h"
 uint64 getPageIndex(uint64);
-extern char pageShareCount[(PHYSTOP - KERNBASE) >> 12];
+extern uint8 pageShareCount[32768];
+extern struct spinlock cowLock;
 
 // log.c
 void            initlog(int, struct superblock*);
